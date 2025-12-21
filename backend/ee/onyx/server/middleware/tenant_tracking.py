@@ -49,11 +49,19 @@ async def _get_tenant_id_from_request(
 ) -> str:
     """
     Attempt to extract tenant_id from:
+    0) X-Tenant-Id header (from Oceanic proxy - highest priority for BFF pattern)
     1) The API key or PAT (Personal Access Token) header
     2) The Redis-based token (stored in Cookie: fastapiusersauth)
     3) The anonymous user cookie
     Fallback: POSTGRES_DEFAULT_SCHEMA
     """
+    # Check for X-Tenant-Id header from Oceanic proxy (BFF multi-tenant pattern)
+    # This takes precedence as Oceanic has already validated the user's org membership
+    tenant_from_header = request.headers.get("X-Tenant-Id")
+    if tenant_from_header and is_valid_schema_name(tenant_from_header):
+        logger.debug(f"Using tenant from X-Tenant-Id header: {tenant_from_header}")
+        return tenant_from_header
+
     # Check for API key or PAT in Authorization header
     tenant_id = extract_tenant_from_auth_header(request)
     if tenant_id is not None:
