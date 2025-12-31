@@ -1,0 +1,151 @@
+schema oceanic_work_order_step {
+    document oceanic_work_order_step {
+        # Primary identifier
+        field step_id type string {
+            indexing: summary | attribute
+            rank: filter
+            attribute: fast-search
+        }
+
+        # Parent work order reference
+        field work_order_id type string {
+            indexing: summary | attribute
+            rank: filter
+            attribute: fast-search
+        }
+
+        # Multi-tenant organization ID
+        field org_id type string {
+            indexing: summary | attribute
+            rank: filter
+            attribute: fast-search
+        }
+
+        # Step order/sequence number
+        field step_order type int {
+            indexing: summary | attribute
+        }
+
+        # Step title
+        field title type string {
+            indexing: summary | index | attribute
+            index: enable-bm25
+        }
+
+        # Step description/instructions
+        field description type string {
+            indexing: summary | index
+            index: enable-bm25
+        }
+
+        # Step type (manual, automated, ai_assisted)
+        field step_type type string {
+            indexing: summary | attribute
+            rank: filter
+            attribute: fast-search
+        }
+
+        # Status (pending, in_progress, completed, failed, skipped)
+        field status type string {
+            indexing: summary | attribute
+            rank: filter
+            attribute: fast-search
+        }
+
+        # Assigned agent ID
+        field assigned_agent type string {
+            indexing: summary | attribute
+            rank: filter
+            attribute: fast-search
+        }
+
+        # Step output/result as JSON string
+        field output type string {
+            indexing: summary | attribute
+        }
+
+        # Error message if failed
+        field error type string {
+            indexing: summary | attribute
+        }
+
+        # Retry count
+        field retry_count type int {
+            indexing: summary | attribute
+        }
+
+        # Flexible metadata as JSON string
+        field metadata type string {
+            indexing: summary | attribute
+        }
+
+        # Embedding for semantic search
+        field embedding type tensor<float>(x[1536]) {
+            indexing: attribute | index
+            attribute {
+                distance-metric: angular
+            }
+        }
+
+        # Timestamps
+        field created_at type long {
+            indexing: summary | attribute
+        }
+
+        field updated_at type long {
+            indexing: summary | attribute
+        }
+
+        field started_at type long {
+            indexing: summary | attribute
+        }
+
+        field completed_at type long {
+            indexing: summary | attribute
+        }
+    }
+
+    fieldset default {
+        fields: title, description
+    }
+
+    rank-profile default_rank {
+        first-phase {
+            expression: bm25(title) + 0.5 * bm25(description)
+        }
+    }
+
+    rank-profile semantic_search {
+        inputs {
+            query(query_embedding) tensor<float>(x[1536])
+        }
+
+        first-phase {
+            expression: closeness(field, embedding)
+        }
+    }
+
+    rank-profile hybrid_search {
+        inputs {
+            query(query_embedding) tensor<float>(x[1536])
+            query(alpha) double: 0.5
+        }
+
+        function text_score() {
+            expression: bm25(title) + 0.5 * bm25(description)
+        }
+
+        function vector_score() {
+            expression: closeness(field, embedding)
+        }
+
+        first-phase {
+            expression: closeness(field, embedding)
+        }
+
+        global-phase {
+            expression: query(alpha) * normalize_linear(vector_score) + (1 - query(alpha)) * normalize_linear(text_score)
+            rerank-count: 100
+        }
+    }
+}

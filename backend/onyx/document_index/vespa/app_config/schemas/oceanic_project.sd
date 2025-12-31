@@ -1,0 +1,123 @@
+schema oceanic_project {
+    document oceanic_project {
+        # Primary identifier
+        field project_id type string {
+            indexing: summary | attribute
+            rank: filter
+            attribute: fast-search
+        }
+
+        # Multi-tenant organization ID
+        field org_id type string {
+            indexing: summary | attribute
+            rank: filter
+            attribute: fast-search
+        }
+
+        # Project name - indexed for BM25 text search
+        field name type string {
+            indexing: summary | index | attribute
+            index: enable-bm25
+        }
+
+        # Project description - indexed for BM25 text search
+        field description type string {
+            indexing: summary | index
+            index: enable-bm25
+        }
+
+        # Status for filtering (active, archived, deleted)
+        field status type string {
+            indexing: summary | attribute
+            rank: filter
+            attribute: fast-search
+        }
+
+        # GitHub repository URL
+        field github_repo type string {
+            indexing: summary | attribute
+        }
+
+        # Pinned flag for priority display
+        field pinned type bool {
+            indexing: summary | attribute
+            rank: filter
+        }
+
+        # Flexible metadata as JSON string
+        field metadata type string {
+            indexing: summary | attribute
+        }
+
+        # Embedding for semantic search (1536 dimensions for OpenAI)
+        field embedding type tensor<float>(x[1536]) {
+            indexing: attribute | index
+            attribute {
+                distance-metric: angular
+            }
+        }
+
+        # Timestamps (milliseconds since epoch)
+        field created_at type long {
+            indexing: summary | attribute
+        }
+
+        field updated_at type long {
+            indexing: summary | attribute
+        }
+    }
+
+    # Fieldset for combined text search
+    fieldset default {
+        fields: name, description
+    }
+
+    # Default ranking profile
+    rank-profile default_rank {
+        first-phase {
+            expression: bm25(name) + 0.5 * bm25(description)
+        }
+    }
+
+    # Semantic search profile
+    rank-profile semantic_search {
+        inputs {
+            query(query_embedding) tensor<float>(x[1536])
+        }
+
+        first-phase {
+            expression: closeness(field, embedding)
+        }
+    }
+
+    # Hybrid search combining BM25 and vector similarity
+    rank-profile hybrid_search {
+        inputs {
+            query(query_embedding) tensor<float>(x[1536])
+            query(alpha) double: 0.5
+        }
+
+        function text_score() {
+            expression: bm25(name) + 0.5 * bm25(description)
+        }
+
+        function vector_score() {
+            expression: closeness(field, embedding)
+        }
+
+        first-phase {
+            expression: closeness(field, embedding)
+        }
+
+        global-phase {
+            expression: query(alpha) * normalize_linear(vector_score) + (1 - query(alpha)) * normalize_linear(text_score)
+            rerank-count: 100
+        }
+
+        match-features {
+            bm25(name)
+            bm25(description)
+            closeness(field, embedding)
+        }
+    }
+}

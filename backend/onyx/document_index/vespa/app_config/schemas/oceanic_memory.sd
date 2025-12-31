@@ -1,0 +1,184 @@
+schema oceanic_memory {
+    document oceanic_memory {
+        # Primary identifier
+        field memory_id type string {
+            indexing: summary | attribute
+            rank: filter
+            attribute: fast-search
+        }
+
+        # Multi-tenant organization ID
+        field org_id type string {
+            indexing: summary | attribute
+            rank: filter
+            attribute: fast-search
+        }
+
+        # Agent that created this memory
+        field agent_id type string {
+            indexing: summary | attribute
+            rank: filter
+            attribute: fast-search
+        }
+
+        # Memory type (reflection, task_context, learning, decision, etc.)
+        field memory_type type string {
+            indexing: summary | attribute
+            rank: filter
+            attribute: fast-search
+        }
+
+        # Memory content - indexed for BM25 text search
+        field content type string {
+            indexing: summary | index
+            index: enable-bm25
+        }
+
+        # Title or brief summary of the memory
+        field title type string {
+            indexing: summary | index | attribute
+            index: enable-bm25
+        }
+
+        # Source context (project, task, conversation, etc.)
+        field source_type type string {
+            indexing: summary | attribute
+            rank: filter
+            attribute: fast-search
+        }
+
+        # Source ID reference
+        field source_id type string {
+            indexing: summary | attribute
+            rank: filter
+            attribute: fast-search
+        }
+
+        # Importance score (0.0 to 1.0)
+        field importance type float {
+            indexing: summary | attribute
+        }
+
+        # Tags for categorization
+        field tags type array<string> {
+            indexing: summary | attribute
+            attribute: fast-search
+        }
+
+        # Related entity IDs
+        field related_entities type array<string> {
+            indexing: summary | attribute
+            attribute: fast-search
+        }
+
+        # Flexible metadata as JSON string
+        field metadata type string {
+            indexing: summary | attribute
+        }
+
+        # Embedding for semantic search (1536 dimensions for OpenAI)
+        field embedding type tensor<float>(x[1536]) {
+            indexing: attribute | index
+            attribute {
+                distance-metric: angular
+            }
+        }
+
+        # Access count for popularity tracking
+        field access_count type int {
+            indexing: summary | attribute
+        }
+
+        # Last accessed timestamp
+        field last_accessed_at type long {
+            indexing: summary | attribute
+        }
+
+        # Timestamps (milliseconds since epoch)
+        field created_at type long {
+            indexing: summary | attribute
+        }
+
+        field updated_at type long {
+            indexing: summary | attribute
+        }
+
+        # Expiry timestamp for TTL (0 = never expires)
+        field expires_at type long {
+            indexing: summary | attribute
+        }
+    }
+
+    # Fieldset for combined text search
+    fieldset default {
+        fields: content, title
+    }
+
+    # Default ranking profile
+    rank-profile default_rank {
+        first-phase {
+            expression: bm25(title) + 0.5 * bm25(content)
+        }
+    }
+
+    # Semantic search profile for agent memory retrieval
+    rank-profile semantic_search {
+        inputs {
+            query(query_embedding) tensor<float>(x[1536])
+        }
+
+        first-phase {
+            expression: closeness(field, embedding)
+        }
+    }
+
+    # Hybrid search combining BM25 and vector similarity
+    rank-profile hybrid_search {
+        inputs {
+            query(query_embedding) tensor<float>(x[1536])
+            query(alpha) double: 0.5
+        }
+
+        function text_score() {
+            expression: bm25(title) + 0.5 * bm25(content)
+        }
+
+        function vector_score() {
+            expression: closeness(field, embedding)
+        }
+
+        first-phase {
+            expression: closeness(field, embedding)
+        }
+
+        global-phase {
+            expression: query(alpha) * normalize_linear(vector_score) + (1 - query(alpha)) * normalize_linear(text_score)
+            rerank-count: 100
+        }
+
+        match-features {
+            bm25(title)
+            bm25(content)
+            closeness(field, embedding)
+        }
+    }
+
+    # Importance-weighted search for relevant memories
+    rank-profile importance_search {
+        inputs {
+            query(query_embedding) tensor<float>(x[1536])
+        }
+
+        function recency_factor() {
+            expression: 1 / (1 + (now() - attribute(created_at)) / 86400000)
+        }
+
+        function importance_factor() {
+            expression: if(isNan(attribute(importance)), 0.5, attribute(importance))
+        }
+
+        first-phase {
+            expression: closeness(field, embedding) * importance_factor * recency_factor
+        }
+    }
+}

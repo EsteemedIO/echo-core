@@ -1,0 +1,177 @@
+schema oceanic_task {
+    document oceanic_task {
+        # Primary identifier
+        field task_id type string {
+            indexing: summary | attribute
+            rank: filter
+            attribute: fast-search
+        }
+
+        # Parent project reference
+        field project_id type string {
+            indexing: summary | attribute
+            rank: filter
+            attribute: fast-search
+        }
+
+        # Multi-tenant organization ID
+        field org_id type string {
+            indexing: summary | attribute
+            rank: filter
+            attribute: fast-search
+        }
+
+        # Task title - indexed for BM25 text search
+        field title type string {
+            indexing: summary | index | attribute
+            index: enable-bm25
+        }
+
+        # Task description - indexed for BM25 text search
+        field description type string {
+            indexing: summary | index
+            index: enable-bm25
+        }
+
+        # Status for kanban filtering (todo, doing, review, done)
+        field status type string {
+            indexing: summary | attribute
+            rank: filter
+            attribute: fast-search
+        }
+
+        # Priority level (low, medium, high, urgent)
+        field priority type string {
+            indexing: summary | attribute
+            rank: filter
+            attribute: fast-search
+        }
+
+        # Assignee identifier
+        field assignee type string {
+            indexing: summary | attribute
+            rank: filter
+            attribute: fast-search
+        }
+
+        # Due date (milliseconds since epoch)
+        field due_date type long {
+            indexing: summary | attribute
+        }
+
+        # Task ordering within status column
+        field task_order type int {
+            indexing: summary | attribute
+        }
+
+        # Feature reference for project feature grouping
+        field feature_id type string {
+            indexing: summary | attribute
+            rank: filter
+            attribute: fast-search
+        }
+
+        # Tags for categorization (short keywords)
+        field tags type array<string> {
+            indexing: summary | attribute
+            attribute: fast-search
+        }
+
+        # Labels for visual categorization (Testing, Bug, etc.)
+        field labels type array<string> {
+            indexing: summary | attribute
+            attribute: fast-search
+        }
+
+        # Flexible metadata as JSON string
+        field metadata type string {
+            indexing: summary | attribute
+        }
+
+        # Embedding for semantic search (1536 dimensions for OpenAI)
+        field embedding type tensor<float>(x[1536]) {
+            indexing: attribute | index
+            attribute {
+                distance-metric: angular
+            }
+        }
+
+        # Timestamps (milliseconds since epoch)
+        field created_at type long {
+            indexing: summary | attribute
+        }
+
+        field updated_at type long {
+            indexing: summary | attribute
+        }
+    }
+
+    # Fieldset for combined text search
+    fieldset default {
+        fields: title, description
+    }
+
+    # Default ranking profile
+    rank-profile default_rank {
+        first-phase {
+            expression: bm25(title) + 0.5 * bm25(description)
+        }
+    }
+
+    # Semantic search profile
+    rank-profile semantic_search {
+        inputs {
+            query(query_embedding) tensor<float>(x[1536])
+        }
+
+        first-phase {
+            expression: closeness(field, embedding)
+        }
+    }
+
+    # Hybrid search combining BM25 and vector similarity
+    rank-profile hybrid_search {
+        inputs {
+            query(query_embedding) tensor<float>(x[1536])
+            query(alpha) double: 0.5
+        }
+
+        function text_score() {
+            expression: bm25(title) + 0.5 * bm25(description)
+        }
+
+        function vector_score() {
+            expression: closeness(field, embedding)
+        }
+
+        first-phase {
+            expression: closeness(field, embedding)
+        }
+
+        global-phase {
+            expression: query(alpha) * normalize_linear(vector_score) + (1 - query(alpha)) * normalize_linear(text_score)
+            rerank-count: 100
+        }
+
+        match-features {
+            bm25(title)
+            bm25(description)
+            closeness(field, embedding)
+        }
+    }
+
+    # Priority-boosted search for urgent tasks
+    rank-profile priority_search {
+        inputs {
+            query(query_embedding) tensor<float>(x[1536])
+        }
+
+        function priority_boost() {
+            expression: if(attribute(priority) == "urgent", 2.0, if(attribute(priority) == "high", 1.5, if(attribute(priority) == "medium", 1.0, 0.5)))
+        }
+
+        first-phase {
+            expression: closeness(field, embedding) * priority_boost
+        }
+    }
+}
