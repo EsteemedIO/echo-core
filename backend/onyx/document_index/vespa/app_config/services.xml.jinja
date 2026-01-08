@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8" ?>
 <!-- Echo (Onyx fork) Vespa configuration - compatible with DO Vespa oceanic cluster -->
-<!-- NOTE: This services.xml uses the existing 'oceanic' content cluster on DO Vespa.
-     Echo's danswer_chunk schemas are ADDED to the cluster without removing existing schemas.
-     The oceanic_* schemas are managed by deploy-vespa-schemas.sh, not Echo. -->
+<!-- CRITICAL: This services.xml MUST include oceanic_memory and other Memory Service schemas.
+     Echo deployments will REPLACE the entire content cluster config on Vespa.
+     Any schema not listed here will be REMOVED from Vespa and data will be LOST. -->
 <services version="1.0">
     <container id="default" version="1.0">
         <document-api/>
@@ -14,6 +14,16 @@
     <content id="oceanic" version="1.0">
         <redundancy>1</redundancy>
         <documents>
+            <!-- ========== MEMORY SERVICE SCHEMAS (DO NOT REMOVE) ========== -->
+            <!-- These schemas are required by Memory Service (port 8100) -->
+            <!-- Removing them will cause permanent data loss -->
+            <document type="oceanic_memory" mode="index"/>
+            <document type="oceanic_project" mode="index"/>
+            <document type="oceanic_task" mode="index"/>
+            <document type="oceanic_work_order" mode="index"/>
+            <document type="oceanic_work_order_step" mode="index"/>
+
+            <!-- ========== ECHO RAG SCHEMAS ========== -->
             <!-- Echo (Onyx fork) RAG schemas - dynamically added by ensure_indices_exist -->
             {{ document_elements }}
         </documents>
