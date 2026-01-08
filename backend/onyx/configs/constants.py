@@ -217,6 +217,8 @@ class DocumentSource(str, Enum):
     MOCK_CONNECTOR = "mock_connector"
     # Special case for user files
     USER_FILE = "user_file"
+    # Oceanic Poseidon God Layer integration (Feature-031)
+    POSEIDON = "poseidon"
 
 
 class FederatedConnectorSource(str, Enum):

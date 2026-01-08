@@ -209,4 +209,9 @@ CONNECTOR_CLASS_MAP = {
         module_path="onyx.connectors.mock_connector.connector",
         class_name="MockConnector",
     ),
+    # Oceanic Poseidon God Layer integration (Feature-031)
+    DocumentSource.POSEIDON: ConnectorMapping(
+        module_path="onyx.connectors.poseidon.connector",
+        class_name="PoseidonConnector",
+    ),
 }
