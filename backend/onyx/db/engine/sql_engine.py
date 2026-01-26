@@ -33,7 +33,9 @@ from shared_configs.configs import MULTI_TENANT
 from shared_configs.configs import POSTGRES_DEFAULT_SCHEMA
 from shared_configs.configs import POSTGRES_DEFAULT_SCHEMA_STANDARD_VALUE
 from shared_configs.contextvars import CURRENT_TENANT_ID_CONTEXTVAR
+from shared_configs.contextvars import get_current_db_url
 from shared_configs.contextvars import get_current_tenant_id
+from shared_configs.contextvars import is_full_database_isolation
 
 # Moved is_valid_schema_name here to avoid circular import
 
@@ -54,6 +56,10 @@ ASYNC_DB_API = "asyncpg"
 
 # why isn't this in configs?
 USE_IAM_AUTH = os.getenv("USE_IAM_AUTH", "False").lower() == "true"
+
+# Multi-tenant full database isolation mode
+# Set to "database" for dedicated DB per tenant, "schema" for schema-based
+TENANT_ISOLATION_MODE = os.getenv("TENANT_ISOLATION_MODE", "schema")
 
 
 def build_connection_string(
@@ -289,6 +295,170 @@ class SqlEngine:
                 cls._engine = None
 
 
+# =============================================================================
+# TenantEnginePool - Multi-Tenant Full Database Isolation
+# Feature: ECHO-044 Multi-Tenant Architecture
+# =============================================================================
+
+
+class TenantEnginePool:
+    """
+    Maintains separate SQLAlchemy engines per tenant database for full isolation mode.
+
+    This class provides connection pools for tenant-specific databases when
+    TENANT_ISOLATION_MODE is set to "database". Each Organization gets its own
+    PostgreSQL database and connection pool.
+
+    Thread-safe with LRU eviction for inactive tenant pools.
+    """
+
+    _instance: "TenantEnginePool | None" = None
+    _lock: threading.Lock = threading.Lock()
+
+    # Default pool settings per tenant
+    DEFAULT_POOL_SIZE = 5
+    DEFAULT_MAX_OVERFLOW = 10
+    MAX_TENANT_POOLS = 100  # Maximum number of tenant pools to maintain
+
+    def __new__(cls) -> "TenantEnginePool":
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = super().__new__(cls)
+                    cls._instance._initialized = False
+        return cls._instance
+
+    def __init__(self) -> None:
+        if getattr(self, "_initialized", False):
+            return
+
+        self._engines: dict[str, Engine] = {}
+        self._last_access: dict[str, float] = {}
+        self._engine_lock: threading.RLock = threading.RLock()
+        self._pool_size: int = self.DEFAULT_POOL_SIZE
+        self._max_overflow: int = self.DEFAULT_MAX_OVERFLOW
+        self._initialized = True
+        logger.info(
+            "TenantEnginePool initialized (pool_size=%d, max_overflow=%d)",
+            self._pool_size,
+            self._max_overflow,
+        )
+
+    def configure(self, pool_size: int, max_overflow: int) -> None:
+        """Configure default pool settings for new tenant engines."""
+        self._pool_size = pool_size
+        self._max_overflow = max_overflow
+        logger.info(
+            "TenantEnginePool configured (pool_size=%d, max_overflow=%d)",
+            pool_size,
+            max_overflow,
+        )
+
+    def get_engine(self, database_url: str) -> Engine:
+        """
+        Get or create an engine for the specified tenant database URL.
+
+        Args:
+            database_url: Full PostgreSQL connection URL for the tenant database
+
+        Returns:
+            SQLAlchemy Engine for the tenant database
+        """
+        with self._engine_lock:
+            # Check if engine exists
+            if database_url in self._engines:
+                self._last_access[database_url] = time.time()
+                return self._engines[database_url]
+
+            # Check if we need to evict old engines
+            if len(self._engines) >= self.MAX_TENANT_POOLS:
+                self._evict_oldest_engine()
+
+            # Create new engine
+            engine = self._create_engine(database_url)
+            self._engines[database_url] = engine
+            self._last_access[database_url] = time.time()
+
+            logger.info("TenantEnginePool: Created engine for %s", database_url[:50])
+            return engine
+
+    def _create_engine(self, database_url: str) -> Engine:
+        """Create a new SQLAlchemy engine for a tenant database."""
+        engine_kwargs: dict[str, Any] = {}
+
+        if POSTGRES_USE_NULL_POOL:
+            engine_kwargs["poolclass"] = pool.NullPool
+        else:
+            engine_kwargs["pool_size"] = self._pool_size
+            engine_kwargs["max_overflow"] = self._max_overflow
+            engine_kwargs["pool_pre_ping"] = POSTGRES_POOL_PRE_PING
+            engine_kwargs["pool_recycle"] = POSTGRES_POOL_RECYCLE
+
+        engine = create_engine(database_url, **engine_kwargs)
+
+        if USE_IAM_AUTH:
+            event.listen(engine, "do_connect", provide_iam_token)
+
+        return engine
+
+    def _evict_oldest_engine(self) -> None:
+        """Evict the least recently used engine to make room for new ones."""
+        if not self._last_access:
+            return
+
+        oldest_url = min(self._last_access, key=self._last_access.get)  # type: ignore
+        engine = self._engines.pop(oldest_url, None)
+        self._last_access.pop(oldest_url, None)
+
+        if engine:
+            engine.dispose()
+            logger.info("TenantEnginePool: Evicted engine for %s", oldest_url[:50])
+
+    def dispose_engine(self, database_url: str) -> None:
+        """Dispose of a specific tenant's engine."""
+        with self._engine_lock:
+            engine = self._engines.pop(database_url, None)
+            self._last_access.pop(database_url, None)
+
+            if engine:
+                engine.dispose()
+                logger.info("TenantEnginePool: Disposed engine for %s", database_url[:50])
+
+    def dispose_all(self) -> None:
+        """Dispose of all tenant engines."""
+        with self._engine_lock:
+            for url, engine in self._engines.items():
+                engine.dispose()
+                logger.debug("TenantEnginePool: Disposed engine for %s", url[:50])
+
+            self._engines.clear()
+            self._last_access.clear()
+            logger.info("TenantEnginePool: Disposed all engines")
+
+    def get_stats(self) -> dict[str, Any]:
+        """Get pool statistics for monitoring."""
+        with self._engine_lock:
+            return {
+                "total_engines": len(self._engines),
+                "max_engines": self.MAX_TENANT_POOLS,
+                "pool_size": self._pool_size,
+                "max_overflow": self._max_overflow,
+                "engine_urls": list(self._engines.keys()),
+            }
+
+
+# Global singleton instance
+_tenant_engine_pool: TenantEnginePool | None = None
+
+
+def get_tenant_engine_pool() -> TenantEnginePool:
+    """Get the global TenantEnginePool singleton instance."""
+    global _tenant_engine_pool
+    if _tenant_engine_pool is None:
+        _tenant_engine_pool = TenantEnginePool()
+    return _tenant_engine_pool
+
+
 def get_sqlalchemy_engine() -> Engine:
     return SqlEngine.get_engine()
 
@@ -330,7 +500,24 @@ def get_session_with_shared_schema() -> Generator[Session, None, None]:
 def get_session_with_tenant(*, tenant_id: str) -> Generator[Session, None, None]:
     """
     Generate a database session for a specific tenant.
+
+    In full database isolation mode (TENANT_ISOLATION_MODE="database"),
+    this will use the tenant-specific database URL from context.
+    Otherwise, it uses schema-based isolation with the shared database.
     """
+    # Check for full database isolation mode
+    if is_full_database_isolation():
+        db_url = get_current_db_url()
+        if db_url:
+            # Use tenant-specific database
+            tenant_pool = get_tenant_engine_pool()
+            engine = tenant_pool.get_engine(db_url)
+
+            with Session(bind=engine, expire_on_commit=False) as session:
+                yield session
+            return
+
+    # Fall back to schema-based isolation (original behavior)
     engine = get_sqlalchemy_engine()
 
     if not is_valid_schema_name(tenant_id):
