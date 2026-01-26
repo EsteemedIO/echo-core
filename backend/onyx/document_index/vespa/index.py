@@ -385,6 +385,22 @@ class VespaIndex(DocumentIndex):
         if not MULTI_TENANT:
             raise ValueError("Multi-tenant is not enabled")
 
+        # Check if schemas are already deployed to avoid redundant deployment
+        try:
+            check_url = f"{VESPA_APPLICATION_ENDPOINT}/tenant/default/application/default/environment/prod/region/default/instance/default/content/schemas/"
+            check_response = requests.get(check_url, timeout=10)
+            if check_response.status_code == 200:
+                existing_schemas = check_response.json()
+                # Check if at least the first index schema exists
+                first_schema_url = f"{check_url}{indices[0]}.sd"
+                if any(first_schema_url in s for s in existing_schemas):
+                    logger.notice(
+                        f"Vespa schemas already deployed ({len(existing_schemas)} schemas found). Skipping redeployment."
+                    )
+                    return
+        except Exception as e:
+            logger.debug(f"Could not check existing Vespa schemas: {e}. Proceeding with deployment.")
+
         deploy_url = f"{VESPA_APPLICATION_ENDPOINT}/tenant/default/prepareandactivate"
         logger.info(f"Deploying Vespa application package to {deploy_url}")
 
