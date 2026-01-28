@@ -862,6 +862,72 @@ OAUTH_GOOGLE_DRIVE_CLIENT_SECRET = os.environ.get(
     "OAUTH_GOOGLE_DRIVE_CLIENT_SECRET", ""
 )
 
+# Additional OAuth Connectors (Feature-023/004)
+# GitHub: https://github.com/settings/applications
+OAUTH_GITHUB_CLIENT_ID = os.environ.get("OAUTH_GITHUB_CLIENT_ID", "")
+OAUTH_GITHUB_CLIENT_SECRET = os.environ.get("OAUTH_GITHUB_CLIENT_SECRET", "")
+
+# Microsoft (SharePoint, Teams, OneDrive): https://portal.azure.com
+OAUTH_MICROSOFT_CLIENT_ID = os.environ.get("OAUTH_MICROSOFT_CLIENT_ID", "")
+OAUTH_MICROSOFT_CLIENT_SECRET = os.environ.get("OAUTH_MICROSOFT_CLIENT_SECRET", "")
+
+# Notion: https://www.notion.so/profile/integrations
+OAUTH_NOTION_CLIENT_ID = os.environ.get("OAUTH_NOTION_CLIENT_ID", "")
+OAUTH_NOTION_CLIENT_SECRET = os.environ.get("OAUTH_NOTION_CLIENT_SECRET", "")
+
+# Dropbox: https://www.dropbox.com/developers/apps
+OAUTH_DROPBOX_CLIENT_ID = os.environ.get("OAUTH_DROPBOX_CLIENT_ID", "")
+OAUTH_DROPBOX_CLIENT_SECRET = os.environ.get("OAUTH_DROPBOX_CLIENT_SECRET", "")
+
+# Salesforce: https://login.salesforce.com/
+OAUTH_SALESFORCE_CLIENT_ID = os.environ.get("OAUTH_SALESFORCE_CLIENT_ID", "")
+OAUTH_SALESFORCE_CLIENT_SECRET = os.environ.get("OAUTH_SALESFORCE_CLIENT_SECRET", "")
+
+# HubSpot: https://app.hubspot.com/developer/
+OAUTH_HUBSPOT_CLIENT_ID = os.environ.get("OAUTH_HUBSPOT_CLIENT_ID", "")
+OAUTH_HUBSPOT_CLIENT_SECRET = os.environ.get("OAUTH_HUBSPOT_CLIENT_SECRET", "")
+
+# Linear: https://linear.app/settings/api/applications
+OAUTH_LINEAR_CLIENT_ID = os.environ.get("OAUTH_LINEAR_CLIENT_ID", "")
+OAUTH_LINEAR_CLIENT_SECRET = os.environ.get("OAUTH_LINEAR_CLIENT_SECRET", "")
+
+# Asana: https://app.asana.com/0/my-apps
+OAUTH_ASANA_CLIENT_ID = os.environ.get("OAUTH_ASANA_CLIENT_ID", "")
+OAUTH_ASANA_CLIENT_SECRET = os.environ.get("OAUTH_ASANA_CLIENT_SECRET", "")
+
+# ClickUp: https://app.clickup.com/settings/team/clickup-api
+OAUTH_CLICKUP_CLIENT_ID = os.environ.get("OAUTH_CLICKUP_CLIENT_ID", "")
+OAUTH_CLICKUP_CLIENT_SECRET = os.environ.get("OAUTH_CLICKUP_CLIENT_SECRET", "")
+
+# Discord: https://discord.com/developers/applications
+OAUTH_DISCORD_CLIENT_ID = os.environ.get("OAUTH_DISCORD_CLIENT_ID", "")
+OAUTH_DISCORD_CLIENT_SECRET = os.environ.get("OAUTH_DISCORD_CLIENT_SECRET", "")
+
+# Airtable: https://airtable.com/create/oauth
+OAUTH_AIRTABLE_CLIENT_ID = os.environ.get("OAUTH_AIRTABLE_CLIENT_ID", "")
+OAUTH_AIRTABLE_CLIENT_SECRET = os.environ.get("OAUTH_AIRTABLE_CLIENT_SECRET", "")
+
+# GitLab: https://gitlab.com/oauth/applications
+OAUTH_GITLAB_CLIENT_ID = os.environ.get("OAUTH_GITLAB_CLIENT_ID", "")
+OAUTH_GITLAB_CLIENT_SECRET = os.environ.get("OAUTH_GITLAB_CLIENT_SECRET", "")
+
+# Zendesk: https://your-subdomain.zendesk.com/admin/apps-integrations/apis/oauth-clients
+OAUTH_ZENDESK_CLIENT_ID = os.environ.get("OAUTH_ZENDESK_CLIENT_ID", "")
+OAUTH_ZENDESK_CLIENT_SECRET = os.environ.get("OAUTH_ZENDESK_CLIENT_SECRET", "")
+OAUTH_ZENDESK_SUBDOMAIN = os.environ.get("OAUTH_ZENDESK_SUBDOMAIN", "")
+
+# Freshdesk: https://your-org.myfreshworks.com/developer/profile/products
+OAUTH_FRESHDESK_CLIENT_ID = os.environ.get("OAUTH_FRESHDESK_CLIENT_ID", "")
+OAUTH_FRESHDESK_CLIENT_SECRET = os.environ.get("OAUTH_FRESHDESK_CLIENT_SECRET", "")
+
+# Box: https://app.box.com/developers/console
+OAUTH_BOX_CLIENT_ID = os.environ.get("OAUTH_BOX_CLIENT_ID", "")
+OAUTH_BOX_CLIENT_SECRET = os.environ.get("OAUTH_BOX_CLIENT_SECRET", "")
+
+# Zoom: https://marketplace.zoom.us/develop/applications
+OAUTH_ZOOM_CLIENT_ID = os.environ.get("OAUTH_ZOOM_CLIENT_ID", "")
+OAUTH_ZOOM_CLIENT_SECRET = os.environ.get("OAUTH_ZOOM_CLIENT_SECRET", "")
+
 # JWT configuration
 JWT_ALGORITHM = "HS256"
 
