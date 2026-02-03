@@ -10,6 +10,9 @@ EE_PUBLIC_ENDPOINT_SPECS = PUBLIC_ENDPOINT_SPECS + [
     ("/enterprise-settings/logo", {"GET"}),
     ("/enterprise-settings/logotype", {"GET"}),
     ("/enterprise-settings/custom-analytics-script", {"GET"}),
+    # Oceanic internal tenant provisioning (protected by X-Internal-Service header)
+    ("/tenants/check/{tenant_id}", {"GET"}),
+    ("/tenants/provision", {"POST"}),
 ]
 
 
