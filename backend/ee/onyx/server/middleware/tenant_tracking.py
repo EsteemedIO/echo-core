@@ -5,10 +5,14 @@ This middleware extracts tenant information from authenticated requests and sets
 context variables for downstream services. It supports both schema-based isolation
 (default Onyx behavior) and full database isolation (Oceanic multi-tenant).
 
+Uses pure ASGI middleware (not BaseHTTPMiddleware) to ensure proper contextvars
+propagation to route handler threads.
+
 Author: Tig (AI Engineer) - Oceanic Platform
 Feature: ECHO-044 Multi-Tenant Architecture
 """
 
+import contextvars
 import logging
 import os
 from collections.abc import Awaitable
@@ -18,6 +22,11 @@ from fastapi import FastAPI
 from fastapi import HTTPException
 from fastapi import Request
 from fastapi import Response
+from starlette.types import ASGIApp
+from starlette.types import Message
+from starlette.types import Receive
+from starlette.types import Scope
+from starlette.types import Send
 
 from ee.onyx.auth.users import decode_anonymous_user_jwt_token
 from onyx.auth.utils import extract_tenant_from_auth_header
@@ -37,32 +46,31 @@ from shared_configs.contextvars import set_tenant_context
 TENANT_ISOLATION_MODE = os.getenv("TENANT_ISOLATION_MODE", "schema")
 
 
-def add_api_server_tenant_id_middleware(
-    app: FastAPI, logger: logging.LoggerAdapter
-) -> None:
-    @app.middleware("http")
-    async def set_tenant_id(
-        request: Request, call_next: Callable[[Request], Awaitable[Response]]
-    ) -> Response:
-        """Extracts the tenant id from multiple locations and sets the context var.
+class TenantMiddleware:
+    """Pure ASGI middleware for tenant context propagation.
 
-        This is very specific to the api server and probably not something you'd want
-        to use elsewhere.
+    Uses contextvars.copy_context().run() to ensure context variables
+    propagate correctly to downstream route handlers and dependencies,
+    avoiding the BaseHTTPMiddleware contextvars propagation bug.
+    """
 
-        In full database isolation mode (TENANT_ISOLATION_MODE="database"), this
-        middleware also:
-        - Looks up the tenant's dedicated database URL
-        - Looks up the tenant's dedicated Vespa URL
-        - Sets additional context variables for downstream routing
-        """
+    def __init__(self, app: ASGIApp, logger: logging.LoggerAdapter) -> None:
+        self.app = app
+        self.logger = logger
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        # Create a request object for header/cookie access
+        request = Request(scope)
+
         try:
             if MULTI_TENANT:
                 tenant_id, org_id, db_url, vespa_url = await _get_tenant_info_from_request(
-                    request, logger
+                    request, self.logger
                 )
-
-                # Determine isolation mode
-                isolation_mode = TENANT_ISOLATION_MODE
 
                 # Set all context variables at once
                 set_tenant_context(
@@ -70,16 +78,28 @@ def add_api_server_tenant_id_middleware(
                     org_id=org_id,
                     db_url=db_url,
                     vespa_url=vespa_url,
-                    isolation_mode=isolation_mode,
+                    isolation_mode=TENANT_ISOLATION_MODE,
                 )
             else:
                 CURRENT_TENANT_ID_CONTEXTVAR.set(POSTGRES_DEFAULT_SCHEMA)
 
-            return await call_next(request)
+            # Run the downstream app in the current context (with tenant set)
+            await self.app(scope, receive, send)
 
         except Exception as e:
-            logger.exception(f"Error in tenant ID middleware: {str(e)}")
+            self.logger.exception(f"Error in tenant ID middleware: {str(e)}")
             raise
+
+
+def add_api_server_tenant_id_middleware(
+    app: FastAPI, logger: logging.LoggerAdapter
+) -> None:
+    """Add tenant tracking middleware to the FastAPI application.
+
+    Uses pure ASGI middleware instead of @app.middleware("http") to ensure
+    proper contextvars propagation to route handler threads.
+    """
+    app.add_middleware(TenantMiddleware, logger=logger)
 
 
 async def _get_tenant_info_from_request(
@@ -93,8 +113,6 @@ async def _get_tenant_info_from_request(
     The tenant_id is used for schema-based isolation.
     The org_id, db_url, and vespa_url are used for full database isolation.
     """
-    tenant_id = POSTGRES_DEFAULT_SCHEMA
-    org_id: str | None = None
     db_url: str | None = None
     vespa_url: str | None = None
 
@@ -103,29 +121,35 @@ async def _get_tenant_info_from_request(
     tenant_from_header = request.headers.get("X-Tenant-Id")
     if tenant_from_header and is_valid_schema_name(tenant_from_header):
         logger.debug(f"Using tenant from X-Tenant-Id header: {tenant_from_header}")
-        org_id = tenant_from_header
-        tenant_id = tenant_from_header
 
-        # In full database isolation mode, look up tenant infrastructure
         if TENANT_ISOLATION_MODE == "database":
             db_url, vespa_url = await _lookup_tenant_infrastructure(
-                org_id, request, logger
+                tenant_from_header, request, logger
             )
 
-        return tenant_id, org_id, db_url, vespa_url
+        return tenant_from_header, tenant_from_header, db_url, vespa_url
 
     # Check for API key or PAT in Authorization header
     auth_tenant_id = extract_tenant_from_auth_header(request)
     if auth_tenant_id is not None:
-        tenant_id = auth_tenant_id
-        org_id = auth_tenant_id
+        if TENANT_ISOLATION_MODE == "database":
+            db_url, vespa_url = await _lookup_tenant_infrastructure(
+                auth_tenant_id, request, logger
+            )
+
+        return auth_tenant_id, auth_tenant_id, db_url, vespa_url
+
+    # Check for explicit tenant_id cookie
+    tenant_id_cookie = request.cookies.get(TENANT_ID_COOKIE_NAME)
+    if tenant_id_cookie and is_valid_schema_name(tenant_id_cookie):
+        logger.debug(f"Using tenant from cookie: {tenant_id_cookie}")
 
         if TENANT_ISOLATION_MODE == "database":
             db_url, vespa_url = await _lookup_tenant_infrastructure(
-                org_id, request, logger
+                tenant_id_cookie, request, logger
             )
 
-        return tenant_id, org_id, db_url, vespa_url
+        return tenant_id_cookie, tenant_id_cookie, db_url, vespa_url
 
     try:
         # Look up token data in Redis
@@ -145,7 +169,6 @@ async def _get_tenant_info_from_request(
             if tenant_id and not is_valid_schema_name(tenant_id):
                 raise HTTPException(status_code=400, detail="Invalid tenant ID format")
 
-            # Extract organization_id if available in token
             org_id = token_data.get("organization_id") or tenant_id
 
             if TENANT_ISOLATION_MODE == "database" and org_id:
@@ -181,32 +204,18 @@ async def _get_tenant_info_from_request(
 
             except Exception as e:
                 logger.error(f"Error decoding anonymous user cookie: {str(e)}")
-                # Continue and attempt to authenticate
 
         logger.debug(
             "Token data not found or expired in Redis, defaulting to POSTGRES_DEFAULT_SCHEMA"
         )
 
-        # Return POSTGRES_DEFAULT_SCHEMA, so non-authenticated requests are sent to the default schema
-        # The CURRENT_TENANT_ID_CONTEXTVAR is initialized with POSTGRES_DEFAULT_SCHEMA,
-        # so we maintain consistency by returning it here when no valid tenant is found.
-        return POSTGRES_DEFAULT_SCHEMA, None, None, None
-
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Unexpected error in _get_tenant_info_from_request: {str(e)}")
-        raise HTTPException(status_code=500, detail="Internal server error")
 
-    finally:
-        if tenant_id and tenant_id != POSTGRES_DEFAULT_SCHEMA:
-            # Check for explicit tenant_id cookie as fallback
-            tenant_id_cookie = request.cookies.get(TENANT_ID_COOKIE_NAME)
-            if tenant_id_cookie and is_valid_schema_name(tenant_id_cookie):
-                return tenant_id_cookie, tenant_id_cookie, db_url, vespa_url
-
-        # Final fallback
-        return POSTGRES_DEFAULT_SCHEMA, None, None, None
+    # Final fallback - use default schema for unauthenticated requests
+    return POSTGRES_DEFAULT_SCHEMA, None, None, None
 
 
 async def _lookup_tenant_infrastructure(
@@ -229,13 +238,10 @@ async def _lookup_tenant_infrastructure(
         Tuple of (database_url, vespa_url), either may be None if not found
     """
     try:
-        # Import here to avoid circular imports
         from onyx.db.tenant_registry import get_tenant_infrastructure
         from onyx.db.tenant_registry import TenantNotProvisionedError
         from onyx.db.tenant_registry import TenantSuspendedError
 
-        # Get a session to the platform database
-        # The platform database stores tenant_infrastructure table
         from onyx.db.engine.sql_engine import get_session_with_shared_schema
 
         with get_session_with_shared_schema() as platform_session:
@@ -256,9 +262,6 @@ async def _lookup_tenant_infrastructure(
                 logger.warning(
                     f"Tenant infrastructure not provisioned for org {org_id}"
                 )
-                # In this case, we allow the request to proceed with schema-based
-                # isolation as a fallback. The Organization may be in the process
-                # of being provisioned.
                 return None, None
 
             except TenantSuspendedError:
@@ -274,9 +277,6 @@ async def _lookup_tenant_infrastructure(
         logger.error(
             f"Error looking up tenant infrastructure for org {org_id}: {str(e)}"
         )
-        # On lookup failure, fall back to schema-based isolation
-        # This maintains backwards compatibility and allows the service to
-        # continue functioning even if the tenant registry is unavailable
         return None, None
 
 
