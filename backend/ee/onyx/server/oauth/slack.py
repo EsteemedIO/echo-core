@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ee.onyx.server.oauth.api_router import router
-from onyx.auth.users import current_admin_user
+from onyx.auth.users import current_user
 from onyx.configs.app_configs import DEV_MODE
 from onyx.configs.app_configs import OAUTH_SLACK_CLIENT_ID
 from onyx.configs.app_configs import OAUTH_SLACK_CLIENT_SECRET
@@ -98,7 +98,7 @@ class SlackOAuth:
 def handle_slack_oauth_callback(
     code: str,
     state: str,
-    user: User = Depends(current_admin_user),
+    user: User = Depends(current_user),
     db_session: Session = Depends(get_session),
     tenant_id: str | None = Depends(get_current_tenant_id),
 ) -> JSONResponse:
