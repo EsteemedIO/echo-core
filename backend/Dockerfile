@@ -1,11 +1,8 @@
 FROM python:3.11.7-slim-bookworm
 
-LABEL com.danswer.maintainer="founders@onyx.app"
-LABEL com.danswer.description="This image is the web/frontend container of Onyx which \
-contains code for both the Community and Enterprise editions of Onyx. If you do not \
-have a contract or agreement with DanswerAI, you are not permitted to use the Enterprise \
-Edition features outside of personal development or testing purposes. Please reach out to \
-founders@onyx.app for more information. Please visit https://github.com/onyx-dot-app/onyx"
+LABEL com.oceanic.maintainer="engineering@esteemed.io"
+LABEL com.oceanic.description="Echo RAG Studio - Oceanic CX Platform component for \
+retrieval-augmented generation, document connectors, and semantic search."
 
 # DO_NOT_TRACK is used to disable telemetry for Unstructured
 ENV DANSWER_RUNNING_IN_DOCKER="true" \

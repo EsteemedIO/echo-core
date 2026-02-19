@@ -38,11 +38,9 @@ SentenceTransformer(model_name_or_path='nomic-ai/nomic-embed-text-v1', trust_rem
 # Final stage - combine all downloads
 FROM base AS final
 
-LABEL com.danswer.maintainer="founders@onyx.app"
-LABEL com.danswer.description="This image is for the Onyx model server which runs all of the \
-AI models for Onyx. This container and all the code is MIT Licensed and free for all to use. \
-You can find it at https://hub.docker.com/r/onyx/onyx-model-server. For more details, \
-visit https://github.com/onyx-dot-app/onyx."
+LABEL com.oceanic.maintainer="engineering@esteemed.io"
+LABEL com.oceanic.description="Echo Model Server - Oceanic CX Platform component for \
+embeddings and AI model inference."
 
 # Create non-root user for security best practices
 RUN groupadd -g 1001 onyx && \
