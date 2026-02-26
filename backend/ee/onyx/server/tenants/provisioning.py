@@ -63,6 +63,9 @@ async def get_or_provision_tenant(
     Get existing tenant ID for an email or create a new tenant if none exists.
     This function should only be called after we have verified we want this user's tenant to exist.
     It returns the tenant ID associated with the email, creating a new tenant if necessary.
+
+    IMPORTANT: If X-Tenant-Id header is provided (from Oceanic BFF proxy), use that tenant
+    as the user's intent is to authenticate within that specific organization context.
     """
     # Early return for non-multi-tenant mode
     if not MULTI_TENANT:
@@ -71,7 +74,34 @@ async def get_or_provision_tenant(
     if referral_source and request:
         await submit_to_hubspot(email, referral_source, request)
 
-    # First, check if the user already has a tenant
+    # Check for explicit X-Tenant-Id header from Oceanic BFF proxy
+    # This indicates the user is authenticating within a specific organization context
+    # and should take precedence over email-based tenant lookup
+    if request:
+        explicit_tenant_id = request.headers.get("X-Tenant-Id")
+        if explicit_tenant_id:
+            logger.debug(
+                f"Using explicit tenant from X-Tenant-Id header: {explicit_tenant_id}"
+            )
+            # Verify the tenant exists in available_tenant table
+            try:
+                with get_session_with_shared_schema() as db_session:
+                    result = db_session.execute(
+                        select(AvailableTenant).where(
+                            AvailableTenant.tenant_id == explicit_tenant_id
+                        )
+                    )
+                    if result.scalar_one_or_none():
+                        return explicit_tenant_id
+                    else:
+                        logger.warning(
+                            f"X-Tenant-Id {explicit_tenant_id} not found in available_tenant, "
+                            "falling back to email lookup"
+                        )
+            except Exception as e:
+                logger.warning(f"Error checking X-Tenant-Id: {e}, falling back to email lookup")
+
+    # Fallback: check if the user already has a tenant mapped by email
     tenant_id: str | None = None
     try:
         tenant_id = get_tenant_id_for_email(email)

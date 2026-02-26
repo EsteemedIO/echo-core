@@ -862,11 +862,17 @@ class TenantAwareRedisStrategy(RedisStrategy[User, uuid.UUID]):
     async def write_token(self, user: User) -> str:
         redis = await get_async_redis_connection()
 
-        tenant_id = await fetch_ee_implementation_or_noop(
-            "onyx.server.tenants.provisioning",
-            "get_or_provision_tenant",
-            async_return_default_schema,
-        )(email=user.email)
+        # First check if tenant context was already set by TenantMiddleware
+        # from X-Tenant-Id header (Oceanic BFF multi-tenant pattern)
+        # This ensures sessions are created for the correct tenant
+        tenant_id = CURRENT_TENANT_ID_CONTEXTVAR.get()
+        if not tenant_id:
+            # Fallback: lookup tenant by email (original behavior)
+            tenant_id = await fetch_ee_implementation_or_noop(
+                "onyx.server.tenants.provisioning",
+                "get_or_provision_tenant",
+                async_return_default_schema,
+            )(email=user.email)
 
         token_data = {
             "sub": str(user.id),
