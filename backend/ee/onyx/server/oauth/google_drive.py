@@ -64,7 +64,7 @@ class GoogleDriveOAuth:
         "https://www.googleapis.com/auth/admin.directory.group.readonly"
     )
 
-    REDIRECT_URI = f"{WEB_DOMAIN}/admin/connectors/google-drive/oauth/callback"
+    REDIRECT_URI = f"{WEB_DOMAIN}/api/echo/oauth/callback/google-drive"
     DEV_REDIRECT_URI = f"https://redirectmeto.com/{REDIRECT_URI}"
 
     @classmethod
@@ -226,4 +226,24 @@ def handle_google_drive_oauth_callback(
             "finalize_url": None,
             "redirect_on_success": session.redirect_on_success,
         }
+    )
+
+
+# GET handler for OAuth callback - matches Google Cloud Console URI format
+# Google redirects with GET request: /api/echo/oauth/callback/google-drive?code=XXX&state=XXX
+@router.get("/callback/google-drive")
+def handle_google_drive_oauth_callback_get(
+    code: str,
+    state: str,
+    user: User = Depends(current_user),
+    db_session: Session = Depends(get_session),
+    tenant_id: str | None = Depends(get_current_tenant_id),
+) -> JSONResponse:
+    """GET handler that delegates to the POST handler logic"""
+    return handle_google_drive_oauth_callback(
+        code=code,
+        state=state,
+        user=user,
+        db_session=db_session,
+        tenant_id=tenant_id,
     )
