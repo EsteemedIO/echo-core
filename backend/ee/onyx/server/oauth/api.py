@@ -11,6 +11,7 @@ from ee.onyx.server.oauth.google_drive import GoogleDriveOAuth
 from ee.onyx.server.oauth.slack import SlackOAuth
 from onyx.auth.users import current_user
 from onyx.configs.app_configs import DEV_MODE
+from onyx.configs.app_configs import WEB_DOMAIN
 from onyx.configs.constants import DocumentSource
 from onyx.db.models import User
 from onyx.redis.redis_pool import get_redis_client
@@ -18,6 +19,12 @@ from onyx.utils.logger import setup_logger
 from shared_configs.contextvars import get_current_tenant_id
 
 logger = setup_logger()
+
+# Use dev redirect proxy only for localhost/127.0.0.1 - not for real domains
+# DEV_MODE may be true for multi-tenant setup but we still want direct OAuth redirects
+_USE_DEV_REDIRECT = DEV_MODE and (
+    "localhost" in (WEB_DOMAIN or "") or "127.0.0.1" in (WEB_DOMAIN or "")
+)
 
 
 @router.post("/prepare-authorization-request")
@@ -43,7 +50,7 @@ def prepare_authorization_request(
 
     session: str | None = None
     if connector == DocumentSource.SLACK:
-        if not DEV_MODE:
+        if not _USE_DEV_REDIRECT:
             oauth_url = SlackOAuth.generate_oauth_url(oauth_state)
         else:
             oauth_url = SlackOAuth.generate_dev_oauth_url(oauth_state)
@@ -52,7 +59,7 @@ def prepare_authorization_request(
             email=user.email, redirect_on_success=redirect_on_success
         )
     elif connector == DocumentSource.CONFLUENCE:
-        if not DEV_MODE:
+        if not _USE_DEV_REDIRECT:
             oauth_url = ConfluenceCloudOAuth.generate_oauth_url(oauth_state)
         else:
             oauth_url = ConfluenceCloudOAuth.generate_dev_oauth_url(oauth_state)
@@ -60,7 +67,7 @@ def prepare_authorization_request(
             email=user.email, redirect_on_success=redirect_on_success
         )
     elif connector == DocumentSource.GOOGLE_DRIVE:
-        if not DEV_MODE:
+        if not _USE_DEV_REDIRECT:
             oauth_url = GoogleDriveOAuth.generate_oauth_url(oauth_state)
         else:
             oauth_url = GoogleDriveOAuth.generate_dev_oauth_url(oauth_state)
