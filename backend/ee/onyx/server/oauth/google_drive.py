@@ -5,15 +5,11 @@ from typing import Any
 from typing import cast
 
 import requests
-from fastapi import Depends
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
 
 from ee.onyx.server.oauth.api_router import router
-from onyx.auth.users import current_user
-from onyx.auth.users import optional_user
 from onyx.configs.app_configs import DEV_MODE
 from onyx.configs.app_configs import OAUTH_GOOGLE_DRIVE_CLIENT_ID
 from onyx.configs.app_configs import OAUTH_GOOGLE_DRIVE_CLIENT_SECRET
@@ -34,12 +30,11 @@ from onyx.connectors.google_utils.shared_constants import (
     GoogleOAuthAuthenticationMethod,
 )
 from onyx.db.credentials import create_credential
-from onyx.db.engine.sql_engine import get_session
-from onyx.db.models import User
+from onyx.db.engine.sql_engine import get_session_with_tenant
 from onyx.db.users import get_user_by_email
 from onyx.redis.redis_pool import get_redis_client
 from onyx.server.documents.models import CredentialBase
-from shared_configs.contextvars import get_current_tenant_id
+from shared_configs.contextvars import CURRENT_TENANT_ID_CONTEXTVAR
 
 
 class GoogleDriveOAuth:
@@ -51,6 +46,7 @@ class GoogleDriveOAuth:
 
         email: str
         redirect_on_success: str | None  # Where to send the user if OAuth flow succeeds
+        tenant_id: str | None = None  # Tenant context for multi-tenant mode
 
     CLIENT_ID = OAUTH_GOOGLE_DRIVE_CLIENT_ID
     CLIENT_SECRET = OAUTH_GOOGLE_DRIVE_CLIENT_SECRET
@@ -58,7 +54,6 @@ class GoogleDriveOAuth:
     TOKEN_URL = "https://oauth2.googleapis.com/token"
 
     # SCOPE is per https://docs.danswer.dev/connectors/google-drive
-    # TODO: Merge with or use google_utils.GOOGLE_SCOPES
     SCOPE = (
         "https://www.googleapis.com/auth/drive.readonly%20"
         "https://www.googleapis.com/auth/drive.metadata.readonly%20"
@@ -75,15 +70,11 @@ class GoogleDriveOAuth:
 
     @classmethod
     def generate_dev_oauth_url(cls, state: str) -> str:
-        """dev mode workaround for localhost testing
-        - https://www.nango.dev/blog/oauth-redirects-on-localhost-with-https
-        """
-
+        """dev mode workaround for localhost testing"""
         return cls._generate_oauth_url_helper(cls.DEV_REDIRECT_URI, state)
 
     @classmethod
     def _generate_oauth_url_helper(cls, redirect_uri: str, state: str) -> str:
-        # without prompt=consent, a refresh token is only issued the first time the user approves
         url = (
             f"https://accounts.google.com/o/oauth2/v2/auth"
             f"?client_id={cls.CLIENT_ID}"
@@ -97,49 +88,41 @@ class GoogleDriveOAuth:
         return url
 
     @classmethod
-    def session_dump_json(cls, email: str, redirect_on_success: str | None) -> str:
-        """Temporary state to store in redis. to be looked up on auth response.
-        Returns a json string.
-        """
+    def session_dump_json(
+        cls, email: str, redirect_on_success: str | None, tenant_id: str | None = None
+    ) -> str:
+        """Temporary state to store in redis. Returns a json string."""
         session = GoogleDriveOAuth.OAuthSession(
-            email=email, redirect_on_success=redirect_on_success
+            email=email, redirect_on_success=redirect_on_success, tenant_id=tenant_id
         )
         return session.model_dump_json()
 
     @classmethod
-    def parse_session(cls, session_json: str) -> OAuthSession:
+    def parse_session(cls, session_json: str) -> "GoogleDriveOAuth.OAuthSession":
         session = GoogleDriveOAuth.OAuthSession.model_validate_json(session_json)
         return session
 
 
-@router.post("/connector/google-drive/callback")
-def handle_google_drive_oauth_callback(
-    code: str,
-    state: str,
-    user: User | None = None,
-    db_session: Session = Depends(get_session),
-    tenant_id: str | None = Depends(get_current_tenant_id),
-) -> JSONResponse:
+def _handle_google_drive_oauth_callback_impl(code: str, state: str) -> JSONResponse:
+    """Handle OAuth callback - extracts tenant from OAuth state, not from request.
+
+    This function does NOT require Depends(get_session) because it extracts
+    the tenant_id from the OAuth state stored in Redis BEFORE accessing the database.
+    """
     if not GoogleDriveOAuth.CLIENT_ID or not GoogleDriveOAuth.CLIENT_SECRET:
         raise HTTPException(
             status_code=500,
             detail="Google Drive client ID or client secret is not configured.",
         )
 
-    r = get_redis_client(tenant_id=tenant_id)
+    # Get OAuth state from Redis (use None for tenant_id to get default client)
+    r = get_redis_client(tenant_id=None)
 
-    # recover the state
-    padded_state = state + "=" * (
-        -len(state) % 4
-    )  # Add padding back (Base64 decoding requires padding)
-    uuid_bytes = base64.urlsafe_b64decode(
-        padded_state
-    )  # Decode the Base64 string back to bytes
-
-    # Convert bytes back to a UUID
+    # Recover the state UUID from base64
+    padded_state = state + "=" * (-len(state) % 4)
+    uuid_bytes = base64.urlsafe_b64decode(padded_state)
     oauth_uuid = uuid.UUID(bytes=uuid_bytes)
     oauth_uuid_str = str(oauth_uuid)
-
     r_key = f"da_oauth:{oauth_uuid_str}"
 
     session_json_bytes = cast(bytes, r.get(r_key))
@@ -150,12 +133,20 @@ def handle_google_drive_oauth_callback(
         )
 
     session_json = session_json_bytes.decode("utf-8")
-    try:
-        session = GoogleDriveOAuth.parse_session(session_json)
+    session = GoogleDriveOAuth.parse_session(session_json)
 
-        # If no user was provided via session, look up by email from OAuth state
-        # This enables OAuth callbacks when proxied through agent-runner (BFF pattern)
-        if user is None:
+    # Extract tenant_id from the OAuth state (stored when OAuth was initiated)
+    tenant_id = session.tenant_id
+    if not tenant_id:
+        tenant_id = "public"  # Fallback to default schema
+
+    # Set the tenant context for this request
+    token = CURRENT_TENANT_ID_CONTEXTVAR.set(tenant_id)
+
+    try:
+        # Get a session with the correct tenant context
+        with get_session_with_tenant(tenant_id=tenant_id) as db_session:
+            # Look up user by email from OAuth state
             user = get_user_by_email(session.email, db_session)
             if user is None:
                 raise HTTPException(
@@ -163,62 +154,74 @@ def handle_google_drive_oauth_callback(
                     detail=f"Google Drive OAuth failed - User not found: {session.email}",
                 )
 
-        if not DEV_MODE:
-            redirect_uri = GoogleDriveOAuth.REDIRECT_URI
-        else:
-            redirect_uri = GoogleDriveOAuth.DEV_REDIRECT_URI
+            # Determine redirect URI based on mode
+            if not DEV_MODE:
+                redirect_uri = GoogleDriveOAuth.REDIRECT_URI
+            else:
+                redirect_uri = GoogleDriveOAuth.DEV_REDIRECT_URI
 
-        # Exchange the authorization code for an access token
-        response = requests.post(
-            GoogleDriveOAuth.TOKEN_URL,
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-            data={
-                "client_id": GoogleDriveOAuth.CLIENT_ID,
-                "client_secret": GoogleDriveOAuth.CLIENT_SECRET,
-                "code": code,
-                "redirect_uri": redirect_uri,
-                "grant_type": "authorization_code",
-            },
+            # Exchange the authorization code for an access token
+            response = requests.post(
+                GoogleDriveOAuth.TOKEN_URL,
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                data={
+                    "client_id": GoogleDriveOAuth.CLIENT_ID,
+                    "client_secret": GoogleDriveOAuth.CLIENT_SECRET,
+                    "code": code,
+                    "redirect_uri": redirect_uri,
+                    "grant_type": "authorization_code",
+                },
+            )
+
+            response.raise_for_status()
+            authorization_response: dict[str, Any] = response.json()
+
+            # Build the authorized_user_info for the connector
+            authorized_user_info = {
+                "client_id": OAUTH_GOOGLE_DRIVE_CLIENT_ID,
+                "client_secret": OAUTH_GOOGLE_DRIVE_CLIENT_SECRET,
+                "refresh_token": authorization_response["refresh_token"],
+            }
+
+            token_json_str = json.dumps(authorized_user_info)
+            oauth_creds = get_google_oauth_creds(
+                token_json_str=token_json_str, source=DocumentSource.GOOGLE_DRIVE
+            )
+            if not oauth_creds:
+                raise RuntimeError("get_google_oauth_creds returned None.")
+
+            # Save the credentials
+            oauth_creds_sanitized_json_str = sanitize_oauth_credentials(oauth_creds)
+
+            credential_dict: dict[str, str] = {
+                DB_CREDENTIALS_DICT_TOKEN_KEY: oauth_creds_sanitized_json_str,
+                DB_CREDENTIALS_PRIMARY_ADMIN_KEY: session.email,
+                DB_CREDENTIALS_AUTHENTICATION_METHOD: GoogleOAuthAuthenticationMethod.OAUTH_INTERACTIVE.value,
+            }
+
+            credential_info = CredentialBase(
+                credential_json=credential_dict,
+                admin_public=True,
+                source=DocumentSource.GOOGLE_DRIVE,
+                name="OAuth (interactive)",
+            )
+
+            create_credential(credential_info, user, db_session)
+
+        # Delete the OAuth state from Redis
+        r.delete(r_key)
+
+        return JSONResponse(
+            content={
+                "success": True,
+                "message": "Google Drive OAuth completed successfully.",
+                "finalize_url": None,
+                "redirect_on_success": session.redirect_on_success,
+            }
         )
 
-        response.raise_for_status()
-
-        authorization_response: dict[str, Any] = response.json()
-
-        # the connector wants us to store the json in its authorized_user_info format
-        # returned from OAuthCredentials.get_authorized_user_info().
-        # So refresh immediately via get_google_oauth_creds with the params filled in
-        # from fields in authorization_response to get the json we need
-        authorized_user_info = {}
-        authorized_user_info["client_id"] = OAUTH_GOOGLE_DRIVE_CLIENT_ID
-        authorized_user_info["client_secret"] = OAUTH_GOOGLE_DRIVE_CLIENT_SECRET
-        authorized_user_info["refresh_token"] = authorization_response["refresh_token"]
-
-        token_json_str = json.dumps(authorized_user_info)
-        oauth_creds = get_google_oauth_creds(
-            token_json_str=token_json_str, source=DocumentSource.GOOGLE_DRIVE
-        )
-        if not oauth_creds:
-            raise RuntimeError("get_google_oauth_creds returned None.")
-
-        # save off the credentials
-        oauth_creds_sanitized_json_str = sanitize_oauth_credentials(oauth_creds)
-
-        credential_dict: dict[str, str] = {}
-        credential_dict[DB_CREDENTIALS_DICT_TOKEN_KEY] = oauth_creds_sanitized_json_str
-        credential_dict[DB_CREDENTIALS_PRIMARY_ADMIN_KEY] = session.email
-        credential_dict[DB_CREDENTIALS_AUTHENTICATION_METHOD] = (
-            GoogleOAuthAuthenticationMethod.OAUTH_INTERACTIVE.value
-        )
-
-        credential_info = CredentialBase(
-            credential_json=credential_dict,
-            admin_public=True,
-            source=DocumentSource.GOOGLE_DRIVE,
-            name="OAuth (interactive)",
-        )
-
-        create_credential(credential_info, user, db_session)
+    except HTTPException:
+        raise
     except Exception as e:
         return JSONResponse(
             status_code=500,
@@ -228,41 +231,23 @@ def handle_google_drive_oauth_callback(
             },
         )
     finally:
-        r.delete(r_key)
+        CURRENT_TENANT_ID_CONTEXTVAR.reset(token)
 
-    # return the result
-    return JSONResponse(
-        content={
-            "success": True,
-            "message": "Google Drive OAuth completed successfully.",
-            "finalize_url": None,
-            "redirect_on_success": session.redirect_on_success,
-        }
-    )
+
+# POST handler for OAuth callback (legacy)
+@router.post("/connector/google-drive/callback")
+def handle_google_drive_oauth_callback(code: str, state: str) -> JSONResponse:
+    """POST handler - delegates to implementation."""
+    return _handle_google_drive_oauth_callback_impl(code=code, state=state)
 
 
 # GET handler for OAuth callback - matches Google Cloud Console URI format
 # Google redirects with GET request: /api/echo/oauth/callback/google-drive?code=XXX&state=XXX
-# Note: Uses optional_user since the callback may come via agent-runner proxy without session cookie
 @router.get("/callback/google-drive")
-async def handle_google_drive_oauth_callback_get(
-    code: str,
-    state: str,
-    user: User | None = Depends(optional_user),
-    db_session: Session = Depends(get_session),
-    tenant_id: str | None = Depends(get_current_tenant_id),
-) -> JSONResponse:
-    """GET handler that delegates to the POST handler logic.
+def handle_google_drive_oauth_callback_get(code: str, state: str) -> JSONResponse:
+    """GET handler for OAuth callback from Google.
 
-    Uses optional_user to support both direct browser access (with session cookie)
-    and proxied access via agent-runner (without session cookie).
-    When no session cookie is present, the user is looked up by email from the
-    OAuth state stored in Redis.
+    Does NOT require current_user authentication. The user and tenant are
+    looked up from the OAuth state stored in Redis.
     """
-    return handle_google_drive_oauth_callback(
-        code=code,
-        state=state,
-        user=user,
-        db_session=db_session,
-        tenant_id=tenant_id,
-    )
+    return _handle_google_drive_oauth_callback_impl(code=code, state=state)

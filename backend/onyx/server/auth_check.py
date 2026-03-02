@@ -59,6 +59,11 @@ PUBLIC_ENDPOINT_SPECS = [
     # anonymous user on cloud
     ("/tenants/anonymous-user", {"POST"}),
     ("/metrics", {"GET"}),  # added by prometheus_fastapi_instrumentator
+    # OAuth callbacks for connectors (Google Drive, Slack, etc.)
+    # These are called by external OAuth providers and don't have user session
+    # User is looked up from OAuth state stored in Redis
+    ("/oauth/connector/google-drive/callback", {"POST"}),
+    ("/oauth/callback/google-drive", {"GET"}),
 ]
 
 

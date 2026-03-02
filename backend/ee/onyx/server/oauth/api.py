@@ -72,7 +72,7 @@ def prepare_authorization_request(
         else:
             oauth_url = GoogleDriveOAuth.generate_dev_oauth_url(oauth_state)
         session = GoogleDriveOAuth.session_dump_json(
-            email=user.email, redirect_on_success=redirect_on_success
+            email=user.email, redirect_on_success=redirect_on_success, tenant_id=tenant_id
         )
     else:
         oauth_url = None
