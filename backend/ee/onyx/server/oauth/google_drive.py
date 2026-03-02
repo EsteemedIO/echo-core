@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from ee.onyx.server.oauth.api_router import router
 from onyx.auth.users import current_user
+from onyx.auth.users import optional_user
 from onyx.configs.app_configs import DEV_MODE
 from onyx.configs.app_configs import OAUTH_GOOGLE_DRIVE_CLIENT_ID
 from onyx.configs.app_configs import OAUTH_GOOGLE_DRIVE_CLIENT_SECRET
@@ -35,6 +36,7 @@ from onyx.connectors.google_utils.shared_constants import (
 from onyx.db.credentials import create_credential
 from onyx.db.engine.sql_engine import get_session
 from onyx.db.models import User
+from onyx.db.users import get_user_by_email
 from onyx.redis.redis_pool import get_redis_client
 from onyx.server.documents.models import CredentialBase
 from shared_configs.contextvars import get_current_tenant_id
@@ -114,7 +116,7 @@ class GoogleDriveOAuth:
 def handle_google_drive_oauth_callback(
     code: str,
     state: str,
-    user: User = Depends(current_user),
+    user: User | None = None,
     db_session: Session = Depends(get_session),
     tenant_id: str | None = Depends(get_current_tenant_id),
 ) -> JSONResponse:
@@ -150,6 +152,16 @@ def handle_google_drive_oauth_callback(
     session_json = session_json_bytes.decode("utf-8")
     try:
         session = GoogleDriveOAuth.parse_session(session_json)
+
+        # If no user was provided via session, look up by email from OAuth state
+        # This enables OAuth callbacks when proxied through agent-runner (BFF pattern)
+        if user is None:
+            user = get_user_by_email(session.email, db_session)
+            if user is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Google Drive OAuth failed - User not found: {session.email}",
+                )
 
         if not DEV_MODE:
             redirect_uri = GoogleDriveOAuth.REDIRECT_URI
@@ -231,15 +243,22 @@ def handle_google_drive_oauth_callback(
 
 # GET handler for OAuth callback - matches Google Cloud Console URI format
 # Google redirects with GET request: /api/echo/oauth/callback/google-drive?code=XXX&state=XXX
+# Note: Uses optional_user since the callback may come via agent-runner proxy without session cookie
 @router.get("/callback/google-drive")
-def handle_google_drive_oauth_callback_get(
+async def handle_google_drive_oauth_callback_get(
     code: str,
     state: str,
-    user: User = Depends(current_user),
+    user: User | None = Depends(optional_user),
     db_session: Session = Depends(get_session),
     tenant_id: str | None = Depends(get_current_tenant_id),
 ) -> JSONResponse:
-    """GET handler that delegates to the POST handler logic"""
+    """GET handler that delegates to the POST handler logic.
+
+    Uses optional_user to support both direct browser access (with session cookie)
+    and proxied access via agent-runner (without session cookie).
+    When no session cookie is present, the user is looked up by email from the
+    OAuth state stored in Redis.
+    """
     return handle_google_drive_oauth_callback(
         code=code,
         state=state,
