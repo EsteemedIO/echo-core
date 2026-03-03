@@ -32,7 +32,7 @@ from onyx.connectors.google_utils.shared_constants import (
 from onyx.db.credentials import create_credential
 from onyx.db.engine.sql_engine import get_session_with_tenant
 from onyx.db.users import get_user_by_email
-from onyx.redis.redis_pool import get_redis_client
+from onyx.redis.redis_pool import redis_pool
 from onyx.server.documents.models import CredentialBase
 from shared_configs.contextvars import CURRENT_TENANT_ID_CONTEXTVAR
 
@@ -115,8 +115,8 @@ def _handle_google_drive_oauth_callback_impl(code: str, state: str) -> JSONRespo
             detail="Google Drive client ID or client secret is not configured.",
         )
 
-    # Get OAuth state from Redis (use None for tenant_id to get default client)
-    r = get_redis_client(tenant_id=None)
+    # Use raw Redis client (no tenant prefix) to retrieve OAuth state
+    r = redis_pool.get_raw_client()
 
     # Recover the state UUID from base64
     padded_state = state + "=" * (-len(state) % 4)

@@ -14,7 +14,7 @@ from onyx.configs.app_configs import DEV_MODE
 from onyx.configs.app_configs import WEB_DOMAIN
 from onyx.configs.constants import DocumentSource
 from onyx.db.models import User
-from onyx.redis.redis_pool import get_redis_client
+from onyx.redis.redis_pool import redis_pool
 from onyx.utils.logger import setup_logger
 from shared_configs.contextvars import get_current_tenant_id
 
@@ -89,7 +89,9 @@ def prepare_authorization_request(
             detail=f"The document source type {connector} failed to generate an OAuth session.",
         )
 
-    r = get_redis_client(tenant_id=tenant_id)
+    # Use raw Redis client (no tenant prefix) for OAuth state
+    # This allows the callback to retrieve the state without knowing the tenant
+    r = redis_pool.get_raw_client()
 
     # store important session state to retrieve when the user is redirected back
     # 10 min is the max we want an oauth flow to be valid
