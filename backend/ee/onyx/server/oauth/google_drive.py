@@ -37,6 +37,14 @@ from onyx.server.documents.models import CredentialBase
 from shared_configs.contextvars import CURRENT_TENANT_ID_CONTEXTVAR
 
 
+# Use dev redirect proxy only for localhost/127.0.0.1 - not for real domains
+# DEV_MODE may be true for multi-tenant setup but we still want direct OAuth redirects
+# This MUST match the logic in api.py to avoid redirect_uri mismatch errors
+_USE_DEV_REDIRECT = DEV_MODE and (
+    "localhost" in (WEB_DOMAIN or "") or "127.0.0.1" in (WEB_DOMAIN or "")
+)
+
+
 class GoogleDriveOAuth:
     # https://developers.google.com/identity/protocols/oauth2
     # https://developers.google.com/identity/protocols/oauth2/web-server
@@ -155,7 +163,10 @@ def _handle_google_drive_oauth_callback_impl(code: str, state: str) -> JSONRespo
                 )
 
             # Determine redirect URI based on mode
-            if not DEV_MODE:
+            # MUST use _USE_DEV_REDIRECT (not DEV_MODE) to match api.py logic
+            # DEV_MODE can be true for real domains like dev.cloud.oceanicai.io
+            # but we only want the proxy redirect for actual localhost
+            if not _USE_DEV_REDIRECT:
                 redirect_uri = GoogleDriveOAuth.REDIRECT_URI
             else:
                 redirect_uri = GoogleDriveOAuth.DEV_REDIRECT_URI
