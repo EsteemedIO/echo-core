@@ -7,6 +7,7 @@ from typing import cast
 import requests
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
 from ee.onyx.server.oauth.api_router import router
@@ -222,14 +223,32 @@ def _handle_google_drive_oauth_callback_impl(code: str, state: str) -> JSONRespo
         # Delete the OAuth state from Redis
         r.delete(r_key)
 
-        return JSONResponse(
-            content={
-                "success": True,
-                "message": "Google Drive OAuth completed successfully.",
-                "finalize_url": None,
-                "redirect_on_success": session.redirect_on_success,
-            }
-        )
+        # Get the credential ID we just created so frontend can link it
+        credential_id = None
+        try:
+            with get_session_with_tenant(tenant_id=tenant_id) as db_session2:
+                from sqlalchemy import select, desc
+                from onyx.db.models import Credential as CredentialModel
+                stmt = (
+                    select(CredentialModel)
+                    .where(CredentialModel.source == DocumentSource.GOOGLE_DRIVE)
+                    .order_by(desc(CredentialModel.time_created))
+                    .limit(1)
+                )
+                cred = db_session2.execute(stmt).scalar_one_or_none()
+                if cred:
+                    credential_id = cred.id
+        except Exception:
+            pass
+
+        # Redirect browser to frontend with OAuth success params
+        redirect_url = session.redirect_on_success or f"{WEB_DOMAIN}/echo/pipelines"
+        separator = "&" if "?" in redirect_url else "?"
+        redirect_url += f"{separator}oauth_success=true&source=google_drive"
+        if credential_id is not None:
+            redirect_url += f"&credential_id={credential_id}"
+
+        return RedirectResponse(url=redirect_url, status_code=302)
 
     except HTTPException:
         raise
