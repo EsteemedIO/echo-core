@@ -242,7 +242,7 @@ def _handle_google_drive_oauth_callback_impl(code: str, state: str) -> JSONRespo
             pass
 
         # Redirect browser to frontend with OAuth success params
-        redirect_url = session.redirect_on_success or f"{WEB_DOMAIN}/echo/pipelines"
+        redirect_url = session.redirect_on_success or f"{WEB_DOMAIN}/products/data/echo/pipelines"
         separator = "&" if "?" in redirect_url else "?"
         redirect_url += f"{separator}oauth_success=true&source=google_drive"
         if credential_id is not None:
