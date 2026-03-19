@@ -255,9 +255,23 @@ def read_text_file(
 
 def pdf_to_text(file: IO[Any], pdf_pass: str | None = None) -> str:
     """
-    Extract text from a PDF. For embedded images, a more complex approach is needed.
-    This is a minimal approach returning text only.
+    Extract text from a PDF. Tries pdfminer first (better for complex layouts
+    like resumes), falls back to pypdf if pdfminer fails.
     """
+    # Try pdfminer first - handles complex PDF layouts much better than pypdf
+    try:
+        from pdfminer.high_level import extract_text as pdfminer_extract
+        file.seek(0)
+        text = pdfminer_extract(file, password=pdf_pass or "")
+        if text and len(text.strip()) > 50:
+            logger.info(f"PDF extracted with pdfminer: {len(text)} chars")
+            from onyx.file_processing.html_utils import strip_excessive_newlines_and_spaces
+            return strip_excessive_newlines_and_spaces(text)
+    except Exception as e:
+        logger.warning(f"pdfminer extraction failed, falling back to pypdf: {e}")
+
+    # Fallback to pypdf
+    file.seek(0)
     text, _, _ = read_pdf_file(file, pdf_pass)
     return text
 
