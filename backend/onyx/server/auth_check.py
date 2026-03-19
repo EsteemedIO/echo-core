@@ -64,6 +64,8 @@ PUBLIC_ENDPOINT_SPECS = [
     # User is looked up from OAuth state stored in Redis
     ("/oauth/connector/google-drive/callback", {"POST"}),
     ("/oauth/callback/google-drive", {"GET"}),
+    ("/oauth/connector/slack/callback", {"POST"}),
+    ("/oauth/callback/slack", {"GET"}),
 ]
 
 
